@@ -2,64 +2,72 @@ package com.fiscalsystemapi.service;
 
 import com.fiscalsystemapi.dto.honorarios.CalculoHonorariosRequest;
 import com.fiscalsystemapi.dto.honorarios.CalculoHonorariosResult;
+import com.fiscalsystemapi.entity.CalculoRealizado;
+import com.fiscalsystemapi.entity.User;
+import com.fiscalsystemapi.entity.enums.CalculationType;
+import com.fiscalsystemapi.util.TaxCalculationUtils;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.Date;
 
 @Service
 public class CalculoHonorariosService {
 
+    private final CalculoRegistroService calculoRegistroService;
+    private final AuthService authService;
+    private final ObjectMapper objectMapper;
+
+    public CalculoHonorariosService(CalculoRegistroService calculoRegistroService,
+                                    AuthService authService,
+                                    ObjectMapper objectMapper) {
+        this.calculoRegistroService = calculoRegistroService;
+        this.authService = authService;
+        this.objectMapper = objectMapper;
+    }
+
     /**
      * Realiza o cálculo do imposto e do valor líquido para honorários,
-     * utilizando as faixas definidas e retornando os dados do processo.
+     * propagando os dados do processo e registrando o cálculo realizado no banco de dados.
      *
      * @param request Objeto que contém numProcesso, solicitante, réu e valorBruto.
      * @return Resultado do cálculo, incluindo imposto, valor líquido, alíquota efetiva e dados do processo.
      */
     public CalculoHonorariosResult calcular(CalculoHonorariosRequest request) {
         BigDecimal valorBruto = request.getValorBruto();
-        BigDecimal imposto;
 
-        BigDecimal limite1 = new BigDecimal("2259.20");
-        BigDecimal limite2 = new BigDecimal("2826.65");
-        BigDecimal limite3 = new BigDecimal("3751.05");
-        BigDecimal limite4 = new BigDecimal("4664.68");
+        BigDecimal imposto = TaxCalculationUtils.calcularImpostoProgressivo(valorBruto);
 
-        if (valorBruto.compareTo(limite1) <= 0) {
-            imposto = BigDecimal.ZERO;
-        } else if (valorBruto.compareTo(limite2) <= 0) {
-            imposto = valorBruto.multiply(new BigDecimal("0.075"))
-                    .subtract(new BigDecimal("169.44"));
-        } else if (valorBruto.compareTo(limite3) <= 0) {
-            imposto = valorBruto.multiply(new BigDecimal("0.15"))
-                    .subtract(new BigDecimal("381.44"));
-        } else if (valorBruto.compareTo(limite4) <= 0) {
-            imposto = valorBruto.multiply(new BigDecimal("0.225"))
-                    .subtract(new BigDecimal("662.77"));
-        } else {
-            imposto = valorBruto.multiply(new BigDecimal("0.275"))
-                    .subtract(new BigDecimal("896"));
-        }
+        BigDecimal liquido = valorBruto.subtract(imposto).setScale(2, RoundingMode.HALF_UP);
 
-        if (imposto.compareTo(BigDecimal.ZERO) < 0) {
-            imposto = BigDecimal.ZERO;
-        }
+        BigDecimal aliquotaEfetiva = TaxCalculationUtils.calcularAliquotaEfetiva(imposto, valorBruto);
 
-        BigDecimal liquido = valorBruto.subtract(imposto);
-        BigDecimal aliquotaEfetiva = BigDecimal.ZERO;
-        if (valorBruto.compareTo(BigDecimal.ZERO) != 0) {
-            aliquotaEfetiva = imposto.divide(valorBruto, 4, RoundingMode.HALF_UP)
-                    .multiply(new BigDecimal("100"));
-        }
-
-        return CalculoHonorariosResult.builder()
+        CalculoHonorariosResult result = CalculoHonorariosResult.builder()
                 .numProcesso(request.getNumProcesso())
                 .solicitante(request.getSolicitante())
                 .reu(request.getReu())
+                .valorBruto(request.getValorBruto())
                 .imposto(imposto.setScale(2, RoundingMode.HALF_UP))
-                .liquido(liquido.setScale(2, RoundingMode.HALF_UP))
-                .aliquotaEfetiva(aliquotaEfetiva.setScale(2, RoundingMode.HALF_UP))
+                .liquido(liquido)
+                .aliquotaEfetiva(aliquotaEfetiva)
                 .build();
+
+        try {
+            String resultadoJson = objectMapper.writeValueAsString(result);
+            User usuarioLogado = authService.getLoggedUser();
+            CalculoRealizado registro = CalculoRealizado.builder()
+                    .numProcesso(request.getNumProcesso())
+                    .tipoCalculo(CalculationType.HONORARIOS.getType())
+                    .resultadoJson(resultadoJson)
+                    .usuario(usuarioLogado)
+                    .dataGeracao(new Date())
+                    .build();
+            calculoRegistroService.salvarCalculo(registro);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return result;
     }
 }

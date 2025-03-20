@@ -5,10 +5,15 @@ import com.fiscalsystemapi.exception.ApiException;
 import com.fiscalsystemapi.repository.UserRepository;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.SignatureAlgorithm;
+import io.jsonwebtoken.io.Decoders;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
+import io.jsonwebtoken.security.Keys;
 
+import java.security.Key;
 import java.util.Date;
 
 @Service
@@ -71,6 +76,8 @@ public class AuthService {
     private String generateJwtToken(User user) {
         Date now = new Date();
         Date expiryDate = new Date(now.getTime() + jwtExpirationMs);
+        byte[] keyBytes = Decoders.BASE64.decode(jwtSecret);
+        Key key = Keys.hmacShaKeyFor(keyBytes);
 
         return Jwts.builder()
                 .setSubject(user.getId().toString())
@@ -78,7 +85,29 @@ public class AuthService {
                 .claim("nomeCompleto", user.getNomeCompleto())
                 .setIssuedAt(now)
                 .setExpiration(expiryDate)
-                .signWith(SignatureAlgorithm.HS512, jwtSecret)
+                .signWith(key, SignatureAlgorithm.HS512)
                 .compact();
+    }
+
+    /**
+     * Retorna o usuário atualmente logado, com base no SecurityContext.
+     *
+     * @return Usuário logado.
+     * @throws ApiException Se não houver usuário autenticado ou se o ID for inválido.
+     */
+    public User getLoggedUser() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || !authentication.isAuthenticated()) {
+            throw new ApiException("Usuário não autenticado!");
+        }
+        String userIdStr = authentication.getPrincipal().toString();
+        Long userId;
+        try {
+            userId = Long.valueOf(userIdStr);
+        } catch (NumberFormatException e) {
+            throw new ApiException("Usuário autenticado com ID inválido!");
+        }
+        return userRepository.findById(userId)
+                .orElseThrow(() -> new ApiException("Usuário não encontrado!"));
     }
 }

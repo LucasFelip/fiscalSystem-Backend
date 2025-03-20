@@ -2,17 +2,35 @@ package com.fiscalsystemapi.service;
 
 import com.fiscalsystemapi.dto.pj.CalculoPjRequest;
 import com.fiscalsystemapi.dto.pj.CalculoPjResult;
+import com.fiscalsystemapi.entity.CalculoRealizado;
+import com.fiscalsystemapi.entity.User;
+import com.fiscalsystemapi.entity.enums.CalculationType;
 import com.fiscalsystemapi.exception.ApiException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.Date;
 
 @Service
 public class CalculoPjService {
 
+    private final CalculoRegistroService calculoRegistroService;
+    private final AuthService authService;
+    private final ObjectMapper objectMapper;
+
+    public CalculoPjService(CalculoRegistroService calculoRegistroService,
+                            AuthService authService,
+                            ObjectMapper objectMapper) {
+        this.calculoRegistroService = calculoRegistroService;
+        this.authService = authService;
+        this.objectMapper = objectMapper;
+    }
+
     /**
-     * Realiza o cálculo do imposto para pessoa jurídica (PJ) com base nos dados informados.
+     * Realiza o cálculo do imposto para pessoa jurídica (PJ) com base nos dados informados,
+     * e registra o cálculo realizado no banco de dados.
      *
      * @param request Objeto contendo numProcesso, nomeParteAutora, nomeParteRe, valorBruto, valorCorrigido,
      *                optanteSimples e ramoAtividade.
@@ -62,7 +80,7 @@ public class CalculoPjService {
         BigDecimal valorLiquido = valorBrutoRPV.subtract(impostoIR).setScale(2, RoundingMode.HALF_UP);
         BigDecimal aliquotaPercent = aliquotaIR.multiply(new BigDecimal("100")).setScale(2, RoundingMode.HALF_UP);
 
-        return CalculoPjResult.builder()
+        CalculoPjResult result = CalculoPjResult.builder()
                 .numProcesso(numProcesso)
                 .nomeParteAutora(nomeParteAutora)
                 .nomeParteRe(nomeParteRe)
@@ -74,5 +92,23 @@ public class CalculoPjService {
                 .impostoIR(impostoIR)
                 .valorLiquido(valorLiquido)
                 .build();
+
+        // Registro do cálculo no banco de dados
+        try {
+            String resultadoJson = objectMapper.writeValueAsString(result);
+            User usuarioLogado = authService.getLoggedUser();
+            CalculoRealizado registro = CalculoRealizado.builder()
+                    .numProcesso(numProcesso)
+                    .tipoCalculo(CalculationType.PJ.getType())
+                    .resultadoJson(resultadoJson)
+                    .usuario(usuarioLogado)
+                    .dataGeracao(new Date())
+                    .build();
+            calculoRegistroService.salvarCalculo(registro);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
+        return result;
     }
 }

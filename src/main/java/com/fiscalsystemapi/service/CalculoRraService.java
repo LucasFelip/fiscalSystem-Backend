@@ -2,16 +2,34 @@ package com.fiscalsystemapi.service;
 
 import com.fiscalsystemapi.dto.rra.CalculoRraRequest;
 import com.fiscalsystemapi.dto.rra.CalculoRraResult;
+import com.fiscalsystemapi.entity.CalculoRealizado;
+import com.fiscalsystemapi.entity.User;
+import com.fiscalsystemapi.entity.enums.CalculationType;
+import com.fiscalsystemapi.util.TaxCalculationUtils;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.Date;
 
 @Service
 public class CalculoRraService {
 
+    private final CalculoRegistroService calculoRegistroService;
+    private final AuthService authService;
+    private final ObjectMapper objectMapper;
+
+    public CalculoRraService(CalculoRegistroService calculoRegistroService,
+                             AuthService authService,
+                             ObjectMapper objectMapper) {
+        this.calculoRegistroService = calculoRegistroService;
+        this.authService = authService;
+        this.objectMapper = objectMapper;
+    }
+
     /**
-     * Realiza o cálculo do IR para RRA com base nos dados informados.
+     * Realiza o cálculo do IR para RRA com base nos dados informados e registra o cálculo realizado.
      *
      * @param request Objeto contendo numProcesso, nomeParteAutora, nomeParteRe, quantidadeMeses, valorBruto e baseCalculoIR.
      * @return Objeto contendo os dados do processo e os valores calculados (imposto total, imposto mensal, alíquota efetiva, valor líquido e média mensal).
@@ -34,45 +52,18 @@ public class CalculoRraService {
         BigDecimal valorBrutoRPV = valorBruto.setScale(2, RoundingMode.HALF_UP);
         BigDecimal baseCalculo = baseCalculoIR.setScale(2, RoundingMode.HALF_UP);
 
+        // Calcula a média mensal da base de cálculo
         BigDecimal mediaMensal = baseCalculo.divide(BigDecimal.valueOf(quantidadeMeses), 10, RoundingMode.HALF_UP);
-        BigDecimal impostoMensal = BigDecimal.ZERO;
-
-        BigDecimal limite1 = new BigDecimal("2259.20");
-        BigDecimal limite2 = new BigDecimal("2826.65");
-        BigDecimal limite3 = new BigDecimal("3751.05");
-        BigDecimal limite4 = new BigDecimal("4664.68");
-
-        if (mediaMensal.compareTo(limite1) > 0) {
-            if (mediaMensal.compareTo(limite2) <= 0) {
-                impostoMensal = mediaMensal.multiply(new BigDecimal("0.075"))
-                        .subtract(new BigDecimal("169.44"));
-            } else if (mediaMensal.compareTo(limite3) <= 0) {
-                impostoMensal = mediaMensal.multiply(new BigDecimal("0.15"))
-                        .subtract(new BigDecimal("381.44"));
-            } else if (mediaMensal.compareTo(limite4) <= 0) {
-                impostoMensal = mediaMensal.multiply(new BigDecimal("0.225"))
-                        .subtract(new BigDecimal("662.77"));
-            } else {
-                impostoMensal = mediaMensal.multiply(new BigDecimal("0.275"))
-                        .subtract(new BigDecimal("896"));
-            }
-        }
-        if (impostoMensal.compareTo(BigDecimal.ZERO) < 0) {
-            impostoMensal = BigDecimal.ZERO;
-        }
-
+        // Utiliza o utilitário para calcular o imposto progressivo com base na média mensal
+        BigDecimal impostoMensal = TaxCalculationUtils.calcularImpostoProgressivo(mediaMensal);
         BigDecimal impostoTotal = impostoMensal.multiply(BigDecimal.valueOf(quantidadeMeses))
                 .setScale(2, RoundingMode.HALF_UP);
-        BigDecimal aliquotaEfetiva = BigDecimal.ZERO;
-        if (baseCalculo.compareTo(BigDecimal.ZERO) > 0) {
-            aliquotaEfetiva = impostoTotal.divide(baseCalculo, 10, RoundingMode.HALF_UP)
-                    .multiply(new BigDecimal("100"))
-                    .setScale(2, RoundingMode.HALF_UP);
-        }
-        BigDecimal valorLiquido = valorBrutoRPV.subtract(impostoTotal)
-                .setScale(2, RoundingMode.HALF_UP);
+        // Calcula a alíquota efetiva usando o utilitário
+        BigDecimal aliquotaEfetiva = TaxCalculationUtils.calcularAliquotaEfetiva(impostoTotal, baseCalculo);
+        BigDecimal valorLiquido = valorBrutoRPV.subtract(impostoTotal).setScale(2, RoundingMode.HALF_UP);
+        mediaMensal = mediaMensal.setScale(2, RoundingMode.HALF_UP);
 
-        return CalculoRraResult.builder()
+        CalculoRraResult result = CalculoRraResult.builder()
                 .numProcesso(numProcesso)
                 .nomeParteAutora(nomeParteAutora)
                 .nomeParteRe(nomeParteRe)
@@ -83,7 +74,25 @@ public class CalculoRraService {
                 .impostoTotal(impostoTotal)
                 .aliquotaEfetiva(aliquotaEfetiva)
                 .valorLiquido(valorLiquido)
-                .mediaMensal(mediaMensal.setScale(2, RoundingMode.HALF_UP))
+                .mediaMensal(mediaMensal)
                 .build();
+
+        // Registra o cálculo no banco de dados
+        try {
+            String resultadoJson = objectMapper.writeValueAsString(result);
+            User usuarioLogado = authService.getLoggedUser();
+            CalculoRealizado registro = CalculoRealizado.builder()
+                    .numProcesso(numProcesso)
+                    .tipoCalculo(CalculationType.RRA.getType())
+                    .resultadoJson(resultadoJson)
+                    .usuario(usuarioLogado)
+                    .dataGeracao(new Date())
+                    .build();
+            calculoRegistroService.salvarCalculo(registro);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
+        return result;
     }
 }

@@ -2,6 +2,8 @@ package com.fiscalsystemapi.config;
 
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
+import io.jsonwebtoken.io.Decoders;
+import io.jsonwebtoken.security.Keys;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -14,6 +16,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
+import java.security.Key;
 import java.util.Collections;
 
 @Component
@@ -27,6 +30,10 @@ public class JwtFilter extends OncePerRequestFilter {
                                     HttpServletResponse response,
                                     FilterChain filterChain)
             throws ServletException, IOException {
+        if(request.getServletPath().startsWith("/auth/")){
+            filterChain.doFilter(request, response);
+            return;
+        }
 
         String header = request.getHeader("Authorization");
         String token = null;
@@ -37,10 +44,14 @@ public class JwtFilter extends OncePerRequestFilter {
 
         if (token != null && SecurityContextHolder.getContext().getAuthentication() == null) {
             try {
-                Claims claims = Jwts.parser()
-                        .setSigningKey(jwtSecret)
+                byte[] keyBytes = Decoders.BASE64.decode(jwtSecret);
+                Key key = Keys.hmacShaKeyFor(keyBytes);
+                Claims claims = Jwts.parserBuilder()
+                        .setSigningKey(key)
+                        .build()
                         .parseClaimsJws(token)
                         .getBody();
+
 
                 String userId = claims.getSubject();
 
@@ -48,7 +59,6 @@ public class JwtFilter extends OncePerRequestFilter {
                     UsernamePasswordAuthenticationToken authentication =
                             new UsernamePasswordAuthenticationToken(userId, null, Collections.emptyList());
                     authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
-
                     SecurityContextHolder.getContext().setAuthentication(authentication);
                 }
             } catch (Exception e) {

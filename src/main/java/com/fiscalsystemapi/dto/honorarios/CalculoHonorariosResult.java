@@ -11,6 +11,7 @@ public class CalculoHonorariosResult {
     private String numProcesso;
     private String solicitante;
     private String reu;
+    private BigDecimal valorBruto;
     private BigDecimal imposto;
     private BigDecimal liquido;
     private BigDecimal aliquotaEfetiva;

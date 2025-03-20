@@ -1,9 +1,11 @@
 package com.fiscalsystemapi.service;
 
+import com.fiscalsystemapi.entity.User;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDDocumentInformation;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.PDPageTree;
 import org.apache.pdfbox.pdmodel.font.PDType1Font;
 import org.springframework.stereotype.Service;
 
@@ -16,6 +18,11 @@ import java.util.List;
 
 @Service
 public class PdfSignatureService {
+    private final AuthService authService;
+
+    public PdfSignatureService(AuthService authService) {
+        this.authService = authService;
+    }
 
     /**
      * Valida se o documento foi gerado pela API.
@@ -56,29 +63,18 @@ public class PdfSignatureService {
      * e os metadados são atualizados para indicar a assinatura.
      *
      * @param pdfBytes      PDF original em formato byte[]
-     * @param signerName    Nome do signatário (para exibir na assinatura)
-     * @param signerId      Identificador do signatário (por exemplo, CPF ou outro identificador)
      * @return PDF assinado em formato byte[]
      * @throws Exception Caso o documento não seja válido para assinatura ou ocorra algum erro.
      */
-    public byte[] signPdf(byte[] pdfBytes, String signerName, String signerId) throws Exception {
+    public byte[] signPdf(byte[] pdfBytes) throws Exception {
         try (PDDocument document = PDDocument.load(new ByteArrayInputStream(pdfBytes))) {
             PDDocumentInformation info = document.getDocumentInformation();
 
-            // Validação: documento deve ter sido gerado pela API
-            String apiGenerated = info.getCustomMetadataValue("API_GENERATED");
-            if (apiGenerated == null || !apiGenerated.equalsIgnoreCase("true")) {
-                throw new Exception("Documento não foi gerado pela API.");
-            }
-
-            // Validação: documento não deve estar previamente assinado
-            String signed = info.getCustomMetadataValue("SIGNED_BY_API");
-            if (signed != null && signed.equalsIgnoreCase("true")) {
-                throw new Exception("Documento já foi assinado pela API.");
-            }
-
+            User signer = authService.getLoggedUser();
+            String signerName = signer.getNomeCompleto();
+            String signerId = signer.getCpf();
             // Adiciona a assinatura visual em cada página
-            List<PDPage> pages = (List<PDPage>) document.getDocumentCatalog().getPages();
+            PDPageTree pages = document.getDocumentCatalog().getPages();
             for (PDPage page : pages) {
                 try (PDPageContentStream contentStream = new PDPageContentStream(document, page, PDPageContentStream.AppendMode.APPEND, true)) {
                     contentStream.beginText();
